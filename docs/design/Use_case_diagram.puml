@@ -1,0 +1,92 @@
+@startuml
+left to right direction
+
+actor Customer
+actor Agent
+actor Admin
+actor "Support Employee" as Support
+actor "Biller System" as Biller
+actor "Notification Provider" as Notification
+
+rectangle "PayLink System" {
+
+    usecase "Register Account" as UC1
+    usecase "Upgrade Verification" as UC2
+    usecase "View Wallet Balance" as UC3
+    usecase "View Transaction History" as UC4
+    usecase "Top Up Wallet" as UC5
+
+    usecase "View Available Billers" as UC6
+    usecase "Inquire About Bill" as UC7
+    usecase "Pay Bill" as UC8
+    usecase "Validate Payment" as UC9
+    usecase "Hold Wallet Funds" as UC10
+    usecase "Process Payment with Biller" as UC11
+    usecase "Receive Payment Callback" as UC12
+
+    usecase "Make Payment on Behalf of Customer" as UC13
+    usecase "Receive Agent Commission" as UC14
+
+    usecase "Manage Billers and Services" as UC15
+    usecase "Manage Fees and Limits" as UC16
+    usecase "View Daily Statistics" as UC17
+
+    usecase "Search Payment" as UC18
+    usecase "View Payment History" as UC19
+    usecase "Block / Unblock Account" as UC20
+    usecase "Review Refund Request" as UC21
+    usecase "View Reconciliation Report" as UC22
+
+    usecase "Send Payment Notification" as UC23
+    usecase "Deliver SMS and Push Notification" as UC24
+    usecase "Provide Settlement File" as UC25
+
+    usecase "Request Refund" as UC26
+}
+
+Customer --> UC1
+Customer --> UC2
+Customer --> UC3
+Customer --> UC4
+Customer --> UC5
+Customer --> UC6
+Customer --> UC7
+Customer --> UC8
+Customer --> UC26
+
+Agent --> UC13
+Agent --> UC14
+
+Admin --> UC15
+Admin --> UC16
+Admin --> UC17
+
+Support --> UC18
+Support --> UC19
+Support --> UC20
+Support --> UC21
+Support --> UC22
+
+Biller --> UC7
+Biller --> UC11
+Biller --> UC12
+Biller --> UC25
+
+Notification --> UC24
+
+UC8 ..> UC9 : <<include>>
+UC8 ..> UC10 : <<include>>
+UC8 ..> UC11 : <<include>>
+
+UC13 ..> UC8 : <<include>>
+UC11 ..> UC12 : <<extend>>
+
+UC8 ..> UC23 : <<include>>
+UC23 ..> UC24 : <<include>>
+
+UC26 ..> UC21 : <<include>>
+UC25 ..> UC22 : <<include>>
+
+UC11 ..> UC14 : <<extend>>
+
+@enduml
