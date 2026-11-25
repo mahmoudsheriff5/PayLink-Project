@@ -1,0 +1,43 @@
+@startuml
+title PayLink - Refund a Failed Payment Sequence Diagram
+
+participant "Payment Processing" as Payment
+participant "Wallet" as Wallet
+participant "Audit Log" as Audit
+participant "Notification Service" as Notification
+participant "SMS / Push Provider" as Provider
+actor Customer
+
+== Refund Failed Payment ==
+
+Payment -> Payment: Receive confirmed biller failure
+Payment -> Payment: Verify status = Failed
+
+Payment -> Audit: Record failed payment
+
+Payment -> Wallet: Release held funds
+Wallet --> Payment: Funds released
+
+Payment -> Payment: Set status = Refunded
+
+Payment -> Audit: Record fund release and refund
+
+Payment ->> Notification: Publish PaymentFailed event
+
+Payment --> Customer: Refund completed
+
+Notification -> Provider: Send failure/refund notification
+
+alt Notification delivered
+    Provider --> Notification: Delivered
+
+else Notification failed
+    loop Retry up to 3 times
+        Notification -> Provider: Retry notification
+        Provider --> Notification: Delivery result
+    end
+
+    Notification -> Audit: Record notification failure
+end
+
+@enduml
