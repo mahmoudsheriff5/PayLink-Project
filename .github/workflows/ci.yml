@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Restore dependencies
+        working-directory: ./backend
+        run: dotnet restore
+
+      - name: Build
+        working-directory: ./backend
+        run: dotnet build --no-restore
+
+      - name: Lint / format check
+        working-directory: ./backend
+        run: dotnet format --verify-no-changes --no-restore
+
+      - name: Run tests
+        working-directory: ./backend
+        run: dotnet test --no-build
