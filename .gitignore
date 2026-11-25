@@ -1,6 +1,8 @@
 ## .NET build & test artifacts
 [Bb]in/
 [Oo]bj/
+[Oo]ut/
+[Pp]ublish/
 [Ll]og/
 [Ll]ogs/
 *.user
@@ -9,8 +11,12 @@
 *.userprefs
 *.scmp
 *.sln.docstates
+*.DotSettings.user
 *.nupkg
 *.snupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
 TestResults/
 coverage/
 
@@ -21,6 +27,7 @@ coverage/
 
 ## IDE & editor files
 .vs/
+.idea/
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
