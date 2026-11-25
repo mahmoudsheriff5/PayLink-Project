@@ -1,0 +1,34 @@
+## .NET build & test artifacts
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.scmp
+*.sln.docstates
+*.nupkg
+*.snupkg
+TestResults/
+coverage/
+
+## Environment & local secret files
+.env
+.env.*
+!.env.example
+
+## IDE & editor files
+.vs/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.swp
+*~
+
+## OS files
+.DS_Store
+Thumbs.db
