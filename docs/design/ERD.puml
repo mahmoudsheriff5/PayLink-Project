@@ -1,0 +1,326 @@
+@startuml PayLink_Relational_ERD
+title PayLink - Relational Database ERD
+hide circle
+skinparam linetype ortho
+
+' ==========================================
+' 1. USERS, ROLES & CONFIGURATION
+' ==========================================
+entity "users" as users {
+  *id : UUID <<PK>>
+  --
+  *full_name : VARCHAR(150)
+  *phone : VARCHAR(20) <<UQ>>
+  *email : VARCHAR(150) <<UQ>>
+  *password_hash : VARCHAR(255)
+  *status : VARCHAR(20) ' ACTIVE, BLOCKED
+  *created_at : TIMESTAMP
+  *updated_at : TIMESTAMP
+}
+
+entity "customers" as customers {
+  *user_id : UUID <<PK, FK>>
+  --
+  *verification_level : VARCHAR(20) ' BASIC, VERIFIED
+  velocity_blocked_until : TIMESTAMP
+  manual_block_reason : TEXT
+}
+
+entity "agents" as agents {
+  *user_id : UUID <<PK, FK>>
+  --
+  *terminal_id : VARCHAR(50) <<UQ>>
+  *commission_rate : DECIMAL(5,4) ' e.g., 0.4000 (40%)
+}
+
+entity "admins" as admins {
+  *user_id : UUID <<PK, FK>>
+  --
+  *department : VARCHAR(100)
+}
+
+entity "support_employees" as support_employees {
+  *user_id : UUID <<PK, FK>>
+  --
+  *support_tier : VARCHAR(50)
+}
+
+entity "system_limit_configs" as limits {
+  *id : UUID <<PK>>
+  --
+  *verification_level : VARCHAR(20) <<UQ>> ' BASIC, VERIFIED
+  *single_tx_min_egp : DECIMAL(12,2)
+  *single_tx_max_egp : DECIMAL(12,2)
+  *daily_limit_egp : DECIMAL(12,2)
+  *velocity_max_count : INT
+  *velocity_window_sec : INT
+  *velocity_block_min : INT
+  *updated_at : TIMESTAMP
+}
+
+' ==========================================
+' 2. WALLETS, TOP-UPS & LEDGER
+' ==========================================
+entity "wallets" as wallets {
+  *id : UUID <<PK>>
+  --
+  owner_user_id : UUID <<FK, UQ>> ' nullable for PLATFORM wallet
+  *wallet_type : VARCHAR(20) ' CUSTOMER, AGENT_COMMISSION, PLATFORM
+  *currency : VARCHAR(3) ' EGP
+  *available_balance : DECIMAL(14,2)
+  *held_balance : DECIMAL(14,2)
+  *updated_at : TIMESTAMP
+}
+
+entity "wallet_top_ups" as topups {
+  *id : UUID <<PK>>
+  --
+  *customer_id : UUID <<FK>>
+  *wallet_id : UUID <<FK>>
+  agent_id : UUID <<FK>> ' nullable if card payment
+  *idempotency_key : VARCHAR(100) <<UQ>>
+  *method : VARCHAR(20) ' SIMULATED_CARD, AGENT_CASH
+  *amount : DECIMAL(14,2)
+  *status : VARCHAR(20) ' PENDING, COMPLETED, FAILED
+  external_reference : VARCHAR(100)
+  *created_at : TIMESTAMP
+}
+
+entity "ledger_entries" as ledger {
+  *id : UUID <<PK>>
+  --
+  *wallet_id : UUID <<FK>>
+  payment_id : UUID <<FK>>
+  top_up_id : UUID <<FK, UQ>> ' nullable
+  *entry_type : VARCHAR(30) ' TOP_UP, HOLD, RELEASE_HOLD, CAPTURE, FEE_INCOME, AGENT_COMMISSION, REFUND
+  *balance_bucket : VARCHAR(20) ' AVAILABLE, HELD
+  *amount : DECIMAL(14,2) ' signed (+ or -)
+  *idempotency_key : VARCHAR(100) <<UQ>>
+  *created_at : TIMESTAMP
+}
+
+' ==========================================
+' 3. DYNAMIC BILLERS, SERVICES & PRICING
+' ==========================================
+entity "billers" as billers {
+  *id : UUID <<PK>>
+  --
+  *code : VARCHAR(50) <<UQ>>
+  *name : VARCHAR(150)
+  *protocol : VARCHAR(30) ' REST_SYNC, SOAP_XML, REST_ASYNC_CALLBACK, BATCH_CSV
+  *endpoint_url : VARCHAR(255)
+  *timeout_seconds : INT ' default 10
+  adapter_config_json : JSONB ' auth, headers, payload mapping
+  *is_active : BOOLEAN
+  *created_at : TIMESTAMP
+  *updated_at : TIMESTAMP
+}
+
+entity "biller_services" as services {
+  *id : UUID <<PK>>
+  --
+  *biller_id : UUID <<FK>>
+  *code : VARCHAR(50)
+  *name : VARCHAR(150)
+  *min_amount : DECIMAL(12,2)
+  *max_amount : DECIMAL(12,2)
+  *is_active : BOOLEAN
+  *created_at : TIMESTAMP
+}
+
+entity "biller_service_fields" as service_fields {
+  *id : UUID <<PK>>
+  --
+  *service_id : UUID <<FK>>
+  *field_key : VARCHAR(50) ' e.g., meter_number, phone_number
+  *display_label : VARCHAR(100)
+  *data_type : VARCHAR(20) ' STRING, NUMBER, ENUM
+  validation_regex : VARCHAR(255)
+  *is_required : BOOLEAN
+  *display_order : INT
+}
+
+entity "fee_rules" as fee_rules {
+  *id : UUID <<PK>>
+  --
+  *service_id : UUID <<FK>>
+  *fee_type : VARCHAR(20) ' FIXED, PERCENTAGE, TIERED
+  fixed_amount : DECIMAL(10,2)
+  percentage_rate : DECIMAL(5,4)
+  min_fee : DECIMAL(10,2)
+  tier_threshold : DECIMAL(12,2)
+  tier_low_fee : DECIMAL(10,2)
+  tier_high_fee : DECIMAL(10,2)
+  *is_active : BOOLEAN
+  *updated_at : TIMESTAMP
+}
+
+entity "promotions" as promotions {
+  *id : UUID <<PK>>
+  --
+  *biller_id : UUID <<FK>>
+  *name : VARCHAR(150)
+  *starts_at : TIMESTAMP
+  *ends_at : TIMESTAMP
+  *is_active : BOOLEAN
+}
+
+' ==========================================
+' 4. PAYMENTS & DYNAMIC INPUTS
+' ==========================================
+entity "payments" as payments {
+  *id : UUID <<PK>>
+  --
+  *reference_code : VARCHAR(50) <<UQ>>
+  *idempotency_key : VARCHAR(100) <<UQ>>
+  *request_payload_hash : VARCHAR(64)
+  *customer_id : UUID <<FK>>
+  agent_id : UUID <<FK>> ' nullable
+  *wallet_id : UUID <<FK>>
+  *service_id : UUID <<FK>>
+  *bill_amount : DECIMAL(14,2)
+  *fee_amount : DECIMAL(14,2)
+  *total_amount : DECIMAL(14,2)
+  *commission_amount : DECIMAL(14,2)
+  *status : VARCHAR(20) ' INITIATED, FUNDS_HELD, SENT_TO_BILLER, COMPLETED, UNKNOWN, FAILED, REJECTED, REFUNDED
+  biller_reference : VARCHAR(100)
+  failure_reason : TEXT
+  *retry_count : INT
+  next_retry_at : TIMESTAMP
+  *created_at : TIMESTAMP
+  *updated_at : TIMESTAMP
+}
+
+entity "payment_input_values" as payment_inputs {
+  *id : UUID <<PK>>
+  --
+  *payment_id : UUID <<FK>>
+  *service_field_id : UUID <<FK>>
+  *field_value : VARCHAR(255)
+}
+
+entity "payment_status_history" as status_history {
+  *id : UUID <<PK>>
+  --
+  *payment_id : UUID <<FK>>
+  from_status : VARCHAR(20)
+  *to_status : VARCHAR(20)
+  reason : TEXT
+  changed_by_user_id : UUID <<FK>>
+  *changed_at : TIMESTAMP
+}
+
+' ==========================================
+' 5. REFUNDS, NOTIFICATIONS, RECONCILIATION & AUDIT
+' ==========================================
+entity "refund_requests" as refunds {
+  *id : UUID <<PK>>
+  --
+  *payment_id : UUID <<FK>>
+  *requested_by_user_id : UUID <<FK>>
+  reviewed_by_user_id : UUID <<FK>> ' nullable, FK to support_employees
+  *reason : TEXT
+  *status : VARCHAR(20) ' PENDING_APPROVAL, APPROVED, REJECTED, COMPLETED
+  *created_at : TIMESTAMP
+  reviewed_at : TIMESTAMP
+}
+
+entity "notifications" as notifications {
+  *id : UUID <<PK>>
+  --
+  payment_id : UUID <<FK>> ' nullable if triggered by refund
+  *recipient_user_id : UUID <<FK>>
+  *channel : VARCHAR(20) ' SMS, EMAIL, PUSH
+  *status : VARCHAR(20) ' PENDING, SENT, UNDELIVERED
+  *message : TEXT
+  *attempt_count : INT
+  next_retry_at : TIMESTAMP
+  last_error : TEXT
+  *created_at : TIMESTAMP
+  *updated_at : TIMESTAMP
+}
+
+entity "refund_notifications" as refund_notifications {
+  *refund_request_id : UUID <<PK, FK>>
+  *notification_id : UUID <<PK, FK>>
+}
+
+entity "settlement_batches" as batches {
+  *id : UUID <<PK>>
+  --
+  *biller_id : UUID <<FK>>
+  *settlement_date : DATE
+  *file_name : VARCHAR(255)
+  *status : VARCHAR(20) ' PROCESSING, COMPLETED, FAILED
+  error_details : TEXT
+  *processed_at : TIMESTAMP
+}
+
+entity "settlement_records" as settlements {
+  *id : UUID <<PK>>
+  --
+  *batch_id : UUID <<FK>>
+  payment_id : UUID <<FK>>
+  *biller_reference : VARCHAR(100)
+  *settled_amount : DECIMAL(14,2)
+  *reconciliation_status : VARCHAR(30) ' MATCHED, MISMATCH, MISSING_IN_PAYLINK, MISSING_IN_BILLER
+  discrepancy_notes : TEXT
+}
+
+entity "audit_logs" as audits {
+  *id : UUID <<PK>>
+  --
+  actor_user_id : UUID <<FK>> ' nullable for SYSTEM actions
+  *actor_type : VARCHAR(20) ' USER, SYSTEM
+  *action : VARCHAR(100)
+  *entity_type : VARCHAR(50)
+  *entity_id : UUID
+  reason : TEXT
+  metadata_json : JSONB
+  *occurred_at : TIMESTAMP
+}
+
+' ==========================================
+' RELATIONSHIPS
+' ==========================================
+users ||--o| customers : "is a"
+users ||--o| agents : "is a"
+users ||--o| admins : "is a"
+users ||--o| support_employees : "is a"
+users |o--o| wallets : "owns"
+users ||--o{ audits : "performs"
+users ||--o{ notifications : "receives"
+users ||--o{ refunds : "requests"
+support_employees |o--o{ refunds : "reviews"
+
+wallets ||--o{ ledger : "computed from"
+wallets ||--o{ topups : "credited by"
+wallets ||--o{ payments : "funds"
+customers ||--o{ topups : "initiates"
+agents |o--o{ topups : "collects cash"
+topups |o--o| ledger : "generates"
+
+billers ||--|{ services : "offers"
+billers ||--o{ promotions : "runs"
+billers ||--o{ batches : "submits"
+services ||--|{ service_fields : "defines inputs"
+services ||--o{ fee_rules : "priced by"
+
+customers ||--o{ payments : "initiates"
+agents |o--o{ payments : "processes"
+services ||--o{ payments : "paid for"
+
+payments ||--|{ payment_inputs : "contains"
+service_fields ||--o{ payment_inputs : "typed by"
+payments ||--o{ status_history : "tracks"
+payments ||--o{ ledger : "generates"
+payments ||--o{ refunds : "may have"
+payments |o--o{ notifications : "triggers"
+
+refunds ||--o{ refund_notifications : "triggers"
+notifications ||--o{ refund_notifications : "linked to"
+
+batches ||--o{ settlements : "contains"
+payments |o--o| settlements : "reconciled with"
+
+@enduml
