@@ -1,0 +1,275 @@
+@startuml
+title PayLink - Pay a Bill Sequence Diagram
+
+actor Customer
+actor Agent
+
+participant "PayLink API" as API
+participant "Payment Processing" as Payment
+participant "Biller Catalog" as Catalog
+participant "Fees & Commissions" as Fees
+participant "Fraud Checks" as Fraud
+participant "Wallet" as Wallet
+participant "Biller Integration\n(Factory + Adapter)" as Integration
+participant "Biller\n(ElectroCo / AquaCo / TopUpNet)" as Biller
+participant "Retry Scheduler" as Scheduler
+participant "Audit Log" as Audit
+participant "Notification Service" as Notification
+
+== 1. Bill Inquiry ==
+
+alt Customer pays directly
+    Customer -> API: Request bill inquiry
+else Agent pays on behalf of customer
+    Agent -> API: Request bill inquiry(customer)
+end
+
+API -> Catalog: Validate biller/service
+Catalog --> API: Valid
+
+API -> Integration: Get bill
+Integration -> Biller: Inquiry(account/meter/phone)
+Biller --> Integration: Bill amount
+Integration --> API: Bill amount
+
+API -> Fees: Calculate service fee(biller, service, amount, promo)
+Fees --> API: Fee + total amount
+
+API --> Customer: Display bill + fee + total
+
+== 2. Confirm Payment ==
+
+Customer -> API: Confirm payment(idempotencyKey)
+
+API -> Payment: Process payment
+
+Payment -> Payment: Check idempotency key
+
+alt Existing key + same payment details
+    Payment --> API: Return existing payment/result
+    API --> Customer: Return existing result
+
+else Existing key + different details
+    Payment --> API: Conflict
+    API --> Customer: Display conflict
+
+else New idempotency key
+
+    Payment -> Payment: Create payment
+    Payment -> Audit: Record Initiated
+
+    Payment -> Catalog: Validate biller/service
+    Catalog --> Payment: Valid
+
+    ' [UPDATED] Calculate fee + total BEFORE fraud checks so amount/limits are evaluated accurately
+    Payment -> Fees: Calculate fee + total(biller, service, amount, promo)
+    Fees --> Payment: Fee + total amount
+
+    Payment -> Fraud: Run fraud checks(actor, totalAmount)
+    alt Fraud check fails
+        Fraud --> Payment: Failed(reason)
+        Payment -> Payment: Set status = Rejected
+        Payment -> Audit: Record rejection
+        Payment --> API: Rejected(reason)
+        API --> Customer: Display rejection reason
+    else Fraud check passes
+        Fraud --> Payment: Passed
+
+        Payment -> Wallet: Atomic hold(total amount)
+
+        alt Insufficient balance / hold fails
+            Wallet --> Payment: Hold failed
+            Payment -> Payment: Set status = Rejected
+            Payment -> Audit: Record rejection
+            Payment --> API: Rejected
+            API --> Customer: Display rejection reason
+
+        else Hold successful
+            Wallet --> Payment: Funds held
+            Payment -> Payment: Set status = FundsHeld
+            Payment -> Audit: Record funds held
+
+            Payment -> Payment: Set status = SentToBiller
+            Payment -> Audit: Record request sent
+
+            Payment -> Integration: Submit payment(reference, amount)
+            Integration -> Biller: Submit payment
+
+            alt Biller confirms success
+                Biller --> Integration: Success
+                Integration --> Payment: Success
+
+                Payment -> Payment: Set status = Completed
+                Payment -> Wallet: Settle held funds
+                Payment -> Wallet: Credit service fee to PayLink income
+
+                opt Payment made by an agent
+                    Payment -> Wallet: Credit 40% commission to agent wallet
+                end
+
+                Payment -> Audit: Record completed payment
+                Payment ->> Notification: Publish PaymentCompleted event
+
+                Payment --> API: Completed
+                API --> Customer: Display success
+
+            else Biller refuses payment
+                Biller --> Integration: Failure(error)
+                Integration --> Payment: Failure(mapped reason)
+
+                Payment -> Payment: Set status = Failed
+                Payment -> Audit: Record biller failure
+                ' [ADDED] Notify customer on failure per FR-22
+                Payment ->> Notification: Publish PaymentFailed event
+
+                Payment --> API: Failed(reason)
+                API --> Customer: Display failure reason
+
+                note over Payment
+                    Failed payment is handled by
+                    the separate "Refund a Failed Payment"
+                    sequence diagram.
+                end note
+
+            else Biller accepts asynchronously
+                Biller --> Integration: Accepted
+                Integration --> Payment: Accepted
+
+                note over Payment,Wallet
+                    Status remains SentToBiller.
+                    Funds remain held.
+                    Result arrives later via callback.
+                end note
+
+                Payment -> Audit: Record asynchronous acceptance
+                Payment --> API: Processing
+                API --> Customer: Display "Payment is being processed"
+
+            else No response within 10 seconds
+                Integration --> Payment: Timeout
+
+                Payment -> Payment: Set status = Unknown
+                Payment -> Audit: Record timeout
+
+                note over Payment,Wallet
+                    Funds remain held.
+                    Unknown is never automatically refunded.
+                end note
+
+                Payment -> Scheduler: Schedule re-queries\n(1, 5 and 15 minutes)
+                Payment --> API: Processing
+                API --> Customer: Display "Payment is being processed"
+
+            end
+        end
+    end
+end
+
+== 3. Re-query Unknown Payment ==
+
+loop While status = Unknown and attempts < 3
+
+    Scheduler -> Payment: QueryPaymentStatusCommand(reference)
+    Payment -> Integration: Query payment status
+    Integration -> Biller: Check payment status
+    Biller --> Integration: Current status
+    Integration --> Payment: Status
+
+    alt Confirmed successful
+        Payment -> Payment: Set status = Completed
+        Payment -> Wallet: Settle held funds
+        Payment -> Wallet: Credit service fee to PayLink income
+
+        opt Payment made by an agent
+            Payment -> Wallet: Credit 40% commission to agent wallet
+        end
+
+        Payment -> Audit: Record successful payment
+        Payment ->> Notification: Publish PaymentCompleted event
+        Payment -> Scheduler: Stop retrying
+
+        Payment --> API: Completed
+        API --> Customer: Display success
+
+    else Confirmed failed
+        Payment -> Payment: Set status = Failed
+        Payment -> Audit: Record confirmed failure
+        Payment -> Scheduler: Stop retrying
+
+        note over Payment
+            Failed payment is handled by
+            the separate "Refund a Failed Payment"
+            sequence diagram.
+        end note
+
+    else Still unknown
+        Payment -> Scheduler: Schedule next attempt
+    end
+
+end
+
+opt Still Unknown after 3 attempts
+
+    Payment -> Payment: Keep status = Unknown
+    Payment -> Audit: Record waiting for reconciliation
+
+    note over Payment,Wallet
+        Funds remain held until a callback
+        or reconciliation confirms the outcome.
+    end note
+
+end
+
+
+== 4. TopUpNet Callback ==
+
+Biller -> API: Send payment callback(reference,result)
+
+API -> Integration: Validate signature + reference
+Integration --> API: Validation result
+
+alt Invalid callback / unknown reference
+    API -> Audit: Record rejected callback
+    API --> Biller: Reject callback
+
+else Valid callback
+
+    API -> Payment: handleCallback(reference,result)
+
+    ' [UPDATED] Guard against duplicate callbacks for already-finalized payments
+    alt Payment already in final state (Completed / Failed / Refunded)
+        Payment -> Audit: Record duplicate callback (ignored)
+        Payment --> API: DuplicateIgnored
+
+    else Callback success
+        Payment -> Payment: Set status = Completed
+        Payment -> Wallet: Settle held funds
+        Payment -> Wallet: Credit service fee to PayLink income
+
+        opt Payment made by an agent
+            Payment -> Wallet: Credit 40% commission to agent wallet
+        end
+
+        Payment -> Audit: Record callback completion
+        Payment ->> Notification: Publish PaymentCompleted event
+        Payment --> API: Completed
+
+    else Callback failure
+        Payment -> Payment: Set status = Failed
+        Payment -> Audit: Record callback failure
+        ' [ADDED] Notify customer on failure per FR-22
+        Payment ->> Notification: Publish PaymentFailed event
+
+        note over Payment
+            Failed payment is handled by
+            the separate "Refund a Failed Payment"
+            sequence diagram.
+        end note
+        Payment --> API: Failed
+
+    end
+
+    API --> Biller: Acknowledge callback
+
+end
+@enduml
