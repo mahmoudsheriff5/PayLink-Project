@@ -1,0 +1,274 @@
+@startuml PayLink_Domain_Class_Diagram
+title PayLink - Domain Class Diagram
+skinparam classAttributeIconSize 0
+hide empty methods
+
+enum VerificationLevel {
+  BASIC
+  VERIFIED
+}
+
+enum AccountStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum PaymentStatus {
+  INITIATED
+  FUNDS_HELD
+  SENT_TO_BILLER
+  COMPLETED
+  UNKNOWN
+  FAILED
+  REJECTED
+  REFUNDED
+}
+
+enum LedgerEntryType {
+  TOP_UP
+  HOLD
+  RELEASE_HOLD
+  CAPTURE
+  FEE_INCOME
+  AGENT_COMMISSION
+  REFUND
+}
+
+enum TopUpMethod {
+  SIMULATED_CARD
+  AGENT_CASH
+}
+
+enum FeeType {
+  FIXED
+  PERCENTAGE
+  TIERED
+}
+
+enum BillerProtocol {
+  REST_SYNC
+  SOAP_XML
+  REST_ASYNC_CALLBACK
+  BATCH_CSV
+}
+
+enum NotificationChannel {
+  SMS
+  EMAIL
+  PUSH
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  UNDELIVERED
+}
+
+enum RefundStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+class User {
+  +id: UUID
+  +fullName: String
+  +phone: String
+  +email: String
+  +status: AccountStatus
+  +createdAt: Instant
+}
+
+class Customer {
+  +verificationLevel: VerificationLevel
+  +dailyLimitEgp: BigDecimal
+  +blockedUntil: Instant
+  +canPay(amount: BigDecimal): boolean
+  +upgradeToVerified(): void
+}
+
+class Agent {
+  +terminalId: String
+  +commissionRate: BigDecimal
+}
+
+class Admin {
+  +department: String
+}
+
+class SupportEmployee {
+  +supportTier: String
+}
+
+class Wallet {
+  +id: UUID
+  +currency: String
+  +availableBalance: BigDecimal
+  +heldBalance: BigDecimal
+  +updatedAt: Instant
+  +holdFunds(amount: BigDecimal, referenceKey: String): void
+  +releaseHold(amount: BigDecimal, referenceKey: String): void
+  +settleHold(amount: BigDecimal, referenceKey: String): void
+  +creditTopUp(amount: BigDecimal, referenceKey: String): void
+  +creditFeeIncome(amount: BigDecimal, referenceKey: String): void
+  +creditCommission(amount: BigDecimal, referenceKey: String): void
+}
+
+class LedgerEntry {
+  +id: UUID
+  +entryType: LedgerEntryType
+  +amount: BigDecimal
+  +referenceKey: String
+  +createdAt: Instant
+}
+
+class TopUpTransaction {
+  +id: UUID
+  +method: TopUpMethod
+  +amount: BigDecimal
+  +idempotencyKey: String
+  +status: String
+  +createdAt: Instant
+}
+
+class Biller {
+  +id: UUID
+  +code: String
+  +name: String
+  +protocol: BillerProtocol
+  +active: Boolean
+  +timeoutSeconds: int
+}
+
+class BillerService {
+  +id: UUID
+  +billerId: UUID
+  +name: String
+  +requiredFields: List<String>
+  +minAmount: BigDecimal
+  +maxAmount: BigDecimal
+  +active: Boolean
+}
+
+class FeeRule {
+  +id: UUID
+  +serviceId: UUID
+  +feeType: FeeType
+  +fixedAmount: BigDecimal
+  +percentageRate: BigDecimal
+  +tierThreshold: BigDecimal
+  +tierLowFee: BigDecimal
+  +tierHighFee: BigDecimal
+  +calculateFee(amount: BigDecimal, promoActive: boolean): BigDecimal
+}
+
+class Promotion {
+  +id: UUID
+  +billerId: UUID
+  +startsAt: Instant
+  +endsAt: Instant
+  +active: Boolean
+  +isActiveAt(timestamp: Instant): boolean
+}
+
+class Payment {
+  +id: UUID
+  +referenceCode: String
+  +idempotencyKey: String
+  +customerAccountNumber: String
+  +billAmount: BigDecimal
+  +feeAmount: BigDecimal
+  +totalAmount: BigDecimal
+  +commissionAmount: BigDecimal
+  +failureReason: String
+  +status: PaymentStatus
+  +retryCount: int
+  +nextRetryAt: Instant
+  +createdAt: Instant
+  +updatedAt: Instant
+  +markFundsHeld(): void
+  +markSentToBiller(): void
+  +markCompleted(): void
+  +markFailed(reason: String): void
+  +markUnknown(nextRetry: Instant): void
+  +markRejected(reason: String): void
+  +markRefunded(): void
+  +isFinal(): boolean
+}
+
+class RefundRequest {
+  +id: UUID
+  +paymentId: UUID
+  +reason: String
+  +status: RefundStatus
+  +reviewedBy: UUID
+  +createdAt: Instant
+}
+
+class Notification {
+  +id: UUID
+  +paymentId: UUID
+  +recipientId: UUID
+  +channel: NotificationChannel
+  +status: NotificationStatus
+  +message: String
+  +attemptCount: int
+  +lastError: String
+  +createdAt: Instant
+  +markSent(): void
+  +markUndelivered(error: String): void
+}
+
+class SettlementRecord {
+  +id: UUID
+  +billerId: UUID
+  +billerReference: String
+  +settledAmount: BigDecimal
+  +settlementDate: LocalDate
+  +discrepancyFlag: String
+}
+
+class AuditLog {
+  +id: UUID
+  +actorId: UUID
+  +action: String
+  +entityType: String
+  +entityId: UUID
+  +metadataJson: String
+  +occurredAt: Instant
+}
+
+User <|-- Customer
+User <|-- Agent
+User <|-- Admin
+User <|-- SupportEmployee
+
+Customer "1" -- "1" Wallet : owns
+Agent "0..1" -- "0..1" Wallet : commission wallet
+Wallet "1" -- "0..*" LedgerEntry : computed from
+Customer "1" -- "0..*" TopUpTransaction : initiates
+Agent "0..1" -- "0..*" TopUpTransaction : processes cash top-up
+Wallet "1" -- "0..*" TopUpTransaction : receives
+TopUpTransaction "1" -- "0..1" LedgerEntry : records
+
+Biller "1" -- "1..*" BillerService : offers
+BillerService "1" -- "0..*" FeeRule : priced by
+Biller "1" -- "0..*" Promotion : runs
+
+Customer "1" -- "0..*" Payment : initiates
+Agent "0..1" -- "0..*" Payment : processes on behalf of
+BillerService "1" -- "0..*" Payment : paid for
+Wallet "1" -- "0..*" Payment : funds/holds
+
+Payment "1" -- "0..*" RefundRequest : may have
+SupportEmployee "0..1" -- "0..*" RefundRequest : reviews
+Payment "1" -- "0..*" Notification : triggers
+' [ADDED] RefundRequest status update triggers notification
+RefundRequest "0..*" -- "0..*" Notification : status update triggers
+' [ADDED] Biller issues settlement records
+Biller "1" -- "0..*" SettlementRecord : issues settlement for
+Payment "0..1" -- "0..1" SettlementRecord : matched against
+User "1" -- "0..*" AuditLog : performs actions
+
+@enduml
